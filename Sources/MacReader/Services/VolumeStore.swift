@@ -76,21 +76,14 @@ final class VolumeStore: ObservableObject {
     private func apply(_ vols: [NTFSVolume], _ newDeps: Dependencies) {
         deps = newDeps
 
-        // Safety bookkeeping: a volume that was writable and vanished without a
-        // clean unmount must be checked on Windows before it is written again.
-        for key in rwActive where !transitioning.contains(key) {
-            if let v = vols.first(where: { $0.key == key }) {
-                if v.state != .readWrite {
-                    // Unmounted while we were watching (e.g. Finder eject) = clean.
-                    // At launch we could not watch, so be conservative.
-                    if !hasScanned { needsCheck.insert(key) }
-                    rwActive.remove(key)
-                }
-            } else {
-                needsCheck.insert(key)
-                rwActive.remove(key)
-            }
-        }
+        let ledger = SafetyLedger.reconcile(
+            SafetyLedger(rwActive: rwActive, needsCheck: needsCheck),
+            volumes: vols,
+            transitioning: transitioning,
+            isFirstScan: !hasScanned
+        )
+        rwActive = ledger.rwActive
+        needsCheck = ledger.needsCheck
         persist()
 
         for v in vols where v.state == .readWrite {

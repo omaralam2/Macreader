@@ -12,6 +12,11 @@ let package = Package(
                 .linkedFramework("DiskArbitration"),
                 .linkedFramework("AppKit"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "MacReaderTests",
+            dependencies: ["MacReader"],
+            path: "Tests/MacReaderTests"
+        ),
     ]
 )

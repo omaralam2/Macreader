@@ -1,0 +1,33 @@
+name: Build & Test (macOS)
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build (release)
+        run: swift build -c release
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Package MacReader.app
+        run: |
+          ./scripts/build_app.sh
+          ditto -c -k --keepParent build/MacReader.app build/MacReader.zip
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: MacReader-app
+          path: build/MacReader.zip

@@ -26,15 +26,32 @@ enum DiskScanner {
     /// - Parameter knownMounts: device id -> mount point for mounts MacReader made.
     static func scan(knownMounts: [String: String]) -> [NTFSVolume] {
         let list = Shell.run(diskutil, ["list", "-plist", "external"])
-        guard list.ok,
-              let root = parsePlist(list.stdout),
-              let disks = root["AllDisksAndPartitions"] as? [[String: Any]]
-        else { return [] }
+        guard list.ok, let root = parsePlist(list.stdout) else { return [] }
 
-        let mounts = mountTable()
         // Also learn device -> mount point from running ntfs-3g processes, so
         // writable mounts are recognised even after MacReader restarts.
-        let allKnownMounts = knownMounts.merging(ntfs3gMounts()) { ours, _ in ours }
+        let psOutput = Shell.run("/bin/ps", ["-axo", "args="]).stdout
+        let allKnownMounts = knownMounts.merging(parseNTFS3GProcesses(psOutput)) { ours, _ in ours }
+
+        return parseVolumes(
+            list: root,
+            info: { id in parsePlist(Shell.run(diskutil, ["info", "-plist", id]).stdout) ?? [:] },
+            mounts: mountTable(),
+            knownMounts: allKnownMounts
+        )
+    }
+
+    /// Pure function (no commands run) so it can be unit-tested with fixtures.
+    /// - Parameters:
+    ///   - list: parsed `diskutil list -plist external`
+    ///   - info: returns parsed `diskutil info -plist <id>`
+    static func parseVolumes(
+        list root: [String: Any],
+        info infoFor: (String) -> [String: Any],
+        mounts: [MountEntry],
+        knownMounts allKnownMounts: [String: String]
+    ) -> [NTFSVolume] {
+        guard let disks = root["AllDisksAndPartitions"] as? [[String: Any]] else { return [] }
         var result: [NTFSVolume] = []
 
         for disk in disks {
@@ -55,7 +72,7 @@ enum DiskScanner {
 
                 guard windowsContents.contains(content) || mountedByUs else { continue }
 
-                let info = parsePlist(Shell.run(diskutil, ["info", "-plist", id]).stdout) ?? [:]
+                let info = infoFor(id)
                 let fsType = (info["FilesystemType"] as? String ?? "").lowercased()
                 let fsName = (info["FilesystemName"] as? String ?? "")
                     + " " + (info["FilesystemUserVisibleName"] as? String ?? "")
@@ -116,8 +133,7 @@ enum DiskScanner {
     }
 
     /// "…/ntfs-3g /dev/disk4s1 /Volumes/My Disk -o …" -> ["disk4s1": "/Volumes/My Disk"]
-    static func ntfs3gMounts() -> [String: String] {
-        let out = Shell.run("/bin/ps", ["-axo", "args="]).stdout
+    static func parseNTFS3GProcesses(_ out: String) -> [String: String] {
         var map: [String: String] = [:]
         let regex = try? NSRegularExpression(pattern: #"^\S*ntfs-3g /dev/(disk[0-9]+s?[0-9]*) (/Volumes/.+?) -o "#)
         for line in out.split(separator: "\n") {
@@ -136,7 +152,7 @@ enum DiskScanner {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    private static func parsePlist(_ text: String) -> [String: Any]? {
+    static func parsePlist(_ text: String) -> [String: Any]? {
         guard let data = text.data(using: .utf8) else { return nil }
         return (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any]
     }
