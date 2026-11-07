@@ -15,7 +15,7 @@ struct MacReaderApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let store = VolumeStore()
+    private(set) lazy var store = VolumeStore()
     private var poweringOff = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {

@@ -6,6 +6,12 @@ struct AppMessage: Equatable {
     let isError: Bool
 }
 
+enum SettingsKeys {
+    static let autoEnable = "autoEnableWrite"
+    static let rwActive = "rwActiveVolumeKeys"
+    static let needsCheck = "needsCheckVolumeKeys"
+}
+
 @MainActor
 final class VolumeStore: ObservableObject {
     @Published private(set) var volumes: [NTFSVolume] = []
@@ -13,12 +19,6 @@ final class VolumeStore: ObservableObject {
     @Published private(set) var busy: Set<String> = []
     @Published private(set) var needsCheck: Set<String>
     @Published var message: AppMessage?
-
-    enum Keys {
-        static let autoEnable = "autoEnableWrite"
-        static let rwActive = "rwActiveVolumeKeys"
-        static let needsCheck = "needsCheckVolumeKeys"
-    }
 
     /// Volumes MacReader mounted read/write and that have not been cleanly unmounted yet.
     private var rwActive: Set<String>
@@ -34,8 +34,8 @@ final class VolumeStore: ObservableObject {
     private let defaults = UserDefaults.standard
 
     init() {
-        needsCheck = Set(defaults.stringArray(forKey: Keys.needsCheck) ?? [])
-        rwActive = Set(defaults.stringArray(forKey: Keys.rwActive) ?? [])
+        needsCheck = Set(defaults.stringArray(forKey: SettingsKeys.needsCheck) ?? [])
+        rwActive = Set(defaults.stringArray(forKey: SettingsKeys.rwActive) ?? [])
         watcher = DiskWatcher { [weak self] in
             Task { @MainActor in self?.scheduleRefresh() }
         }
@@ -102,7 +102,7 @@ final class VolumeStore: ObservableObject {
         volumes = vols
         hasScanned = true
 
-        if defaults.bool(forKey: Keys.autoEnable), deps.ready {
+        if defaults.bool(forKey: SettingsKeys.autoEnable), deps.ready {
             for v in newcomers where (v.state == .readOnly || v.state == .notMounted)
                 && !needsCheck.contains(v.key) {
                 enableWrite(v)
@@ -111,8 +111,8 @@ final class VolumeStore: ObservableObject {
     }
 
     private func persist() {
-        defaults.set(Array(rwActive), forKey: Keys.rwActive)
-        defaults.set(Array(needsCheck), forKey: Keys.needsCheck)
+        defaults.set(Array(rwActive), forKey: SettingsKeys.rwActive)
+        defaults.set(Array(needsCheck), forKey: SettingsKeys.needsCheck)
     }
 
     // MARK: - Actions

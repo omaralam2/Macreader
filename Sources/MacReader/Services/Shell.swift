@@ -13,6 +13,10 @@ enum AdminResult {
     case failure(String)
 }
 
+private final class DataBox: @unchecked Sendable {
+    var data = Data()
+}
+
 enum Shell {
     /// Runs a program directly (no shell involved) and waits for it.
     static func run(_ executable: String, _ arguments: [String]) -> ShellResult {
@@ -31,16 +35,17 @@ enum Shell {
         }
 
         // Read stderr concurrently so a full pipe can never deadlock us.
-        var errData = Data()
+        let errBox = DataBox()
         let group = DispatchGroup()
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {
-            errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            errBox.data = errPipe.fileHandleForReading.readDataToEndOfFile()
             group.leave()
         }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
         group.wait()
         process.waitUntilExit()
+        let errData = errBox.data
 
         return ShellResult(
             status: process.terminationStatus,

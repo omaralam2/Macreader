@@ -66,7 +66,7 @@ enum Mounter {
         switch Shell.runAsAdmin(script) {
         case .success(let output):
             let lines = output.split(whereSeparator: { $0 == "\n" || $0 == "\r" })
-            return lines.last.map(String.init) ?? mountPoint
+            return lines.last.map { String($0) } ?? mountPoint
         case .cancelled:
             throw MountError.cancelled
         case .failure(let message):
@@ -167,7 +167,7 @@ enum Mounter {
             let detail = String(message[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines)
             let lower = detail.lowercased()
             let uncleanHints = ["hibernat", "unsafe state", "fast restart", "unclean", "metadata kept", "windows cache"]
-            if uncleanHints.contains(where: lower.contains) { return .windowsUnclean(detail) }
+            if uncleanHints.contains { lower.contains($0) } { return .windowsUnclean(detail) }
             if lower.contains("fuse") { return .fuseProblem(detail) }
             return .failed(detail)
         }

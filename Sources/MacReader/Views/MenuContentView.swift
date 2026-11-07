@@ -1,9 +1,10 @@
 import AppKit
 import SwiftUI
 
+@MainActor
 struct MenuContentView: View {
     @ObservedObject var store: VolumeStore
-    @AppStorage(VolumeStore.Keys.autoEnable) private var autoEnable = false
+    @AppStorage(SettingsKeys.autoEnable) private var autoEnable = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -62,6 +63,7 @@ struct MenuContentView: View {
     }
 }
 
+@MainActor
 struct VolumeRow: View {
     let volume: NTFSVolume
     @ObservedObject var store: VolumeStore
@@ -139,15 +141,25 @@ struct VolumeRow: View {
 struct StateBadge: View {
     let state: VolumeState
 
+    private var text: String {
+        switch state {
+        case .readWrite: return "قراءة وكتابة"
+        case .readOnly: return "قراءة فقط"
+        case .notMounted: return "مش متركّب"
+        case .unsupported: return "غير مدعوم"
+        }
+    }
+
+    private var color: Color {
+        switch state {
+        case .readWrite: return .green
+        case .readOnly: return .orange
+        case .notMounted: return .gray
+        case .unsupported: return .red
+        }
+    }
+
     var body: some View {
-        let (text, color): (String, Color) = {
-            switch state {
-            case .readWrite: return ("قراءة وكتابة", .green)
-            case .readOnly: return ("قراءة فقط", .orange)
-            case .notMounted: return ("مش متركّب", .gray)
-            case .unsupported: return ("غير مدعوم", .red)
-            }
-        }()
         Text(text)
             .font(.caption.weight(.semibold))
             .padding(.horizontal, 8)
