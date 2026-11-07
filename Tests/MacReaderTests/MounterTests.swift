@@ -30,8 +30,13 @@ final class MounterTests: XCTestCase {
         let forbidden = ["force", "umount -f", "remove_hiberfile", "ntfsfix", "mkntfs", "newfs",
                          "eraseDisk", "eraseVolume", "chkdsk", "-o recover", "rm -rf", "rm -r"]
         for script in [enableScript, disableScript, ejectScript] {
+            // Only lines that actually run (comments may explain *why* we never force).
+            let commands = script.split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("#") }
+                .joined(separator: "\n")
+            XCTAssertFalse(commands.isEmpty)
             for word in forbidden {
-                XCTAssertFalse(script.contains(word), "script must not contain \"\(word)\":\n\(script)")
+                XCTAssertFalse(commands.contains(word), "script must not run \"\(word)\":\n\(commands)")
             }
         }
     }
