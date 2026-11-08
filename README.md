@@ -32,70 +32,98 @@ MacReader **مبيكتبش على الهارد بنفسه**. الكتابة بت
 
 ## المتطلبات
 
-- macOS 13 (Ventura) أو أحدث.
+- macOS 13 (Ventura) أو أحدث. اتجرّب على macOS 27 على Apple Silicon.
 - [Homebrew](https://brew.sh).
-### الطريقة المقترحة: FUSE-T (من غير kernel extension)
+- Xcode أو Command Line Tools: `xcode-select --install`.
 
-مش محتاجة Reduced Security ولا موافقة في الإعدادات ولا Restart، وشغّالة على macOS 26 و 27.
+## التسطيب خطوة بخطوة
+
+الطريقة دي بتستخدم **FUSE-T**: مش محتاجة kernel extension ولا Reduced Security ولا Restart.
 FUSE-T بيشغّل سيرفر NFS صغير على جهازك، والماك بيشوف الهارد كأنه هارد شبكة.
+كل خطوة فيها `sudo` هتطلب باسورد الماك. وانت بتكتبه في الـ Terminal مش هيظهر حاجة، وده طبيعي.
 
-1. **FUSE-T**:
-   ```sh
-   brew trust --cask macos-fuse-t/cask/fuse-t
-   brew install --cask macos-fuse-t/cask/fuse-t
-   ```
-2. **ntfs-3g مبني على FUSE-T** (السكربت بيبني [نسخة FUSE-T من ntfs-3g](https://github.com/macos-fuse-t/ntfs-3g) ويسطّبها في `/usr/local/bin`):
-   ```sh
-   ./scripts/install_ntfs3g_fuse_t.sh
-   ```
+**1. نزّل المشروع:**
+```sh
+git clone https://github.com/omaralam2/Macreader.git ~/Macreader
+cd ~/Macreader
+```
+
+**2. سطّب FUSE-T:**
+```sh
+sudo mkdir -p /usr/local/include /usr/local/lib
+brew trust --cask macos-fuse-t/cask/fuse-t
+brew install --cask macos-fuse-t/cask/fuse-t
+```
+
+**3. ابني ntfs-3g على FUSE-T** (السكربت بيبني [نسخة FUSE-T من ntfs-3g](https://github.com/macos-fuse-t/ntfs-3g) ويسطّبها في `/usr/local/bin/ntfs-3g`، ومش بيلمس أي ntfs-3g تاني عندك):
+```sh
+./scripts/install_ntfs3g_fuse_t.sh
+```
+لما يخلص هيكتب `✅ Installed` وتحته `libfuse-t.dylib`.
+
+**4. ابني التطبيق:**
+```sh
+./scripts/build_app.sh
+```
+لو عندك شهادة مطوّر من Apple، ابني بيها بدل كده، علشان إذن Full Disk Access ميضيعش كل ما تبني من جديد
+(البناء العادي بيعمل توقيع محلي ad-hoc بيتغيّر كل مرة):
+```sh
+security find-identity -v -p codesigning   # اعرف اسم شهادتك
+SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build_app.sh
+```
+
+**5. اديله Full Disk Access:** التطبيق محتاج يقرا الهارد مباشرة.
+افتح **System Settings ← Privacy & Security ← Full Disk Access**، دوس **+**، واختار `~/Macreader/build/MacReader.app`، وفعّله.
+
+**6. شغّله:**
+```sh
+open ~/Macreader/build/MacReader.app
+# أو انقله لمجلد التطبيقات (وساعتها اديه Full Disk Access من هناك):
+cp -R ~/Macreader/build/MacReader.app /Applications/
+```
+هيظهر رمز هارد 🖴 في شريط القوايم فوق. لو حاجة من الخطوات ناقصة، التطبيق هيوريك هي إيه وفيه زرار تنسخ بيه الأمر.
 
 > FUSE-T مجاني للاستخدام الشخصي. لو هتوزّع التطبيق تجارياً لازم رخصة من أصحاب FUSE-T (ونفس الكلام لـ macFUSE). ntfs-3g مفتوح المصدر (GPL).
 
 ### البديل: macFUSE
 
+لو عايز تستخدم macFUSE بدل FUSE-T:
 ```sh
 brew install --cask macfuse
 brew tap gromgit/homebrew-fuse && brew install ntfs-3g-mac
 ```
 محتاج تسمح بالـ kernel extension، وعلى أجهزة **Apple Silicon** لازم **Reduced Security** من Recovery Mode.
 على macOS 26/27 طريقة FSKit بتاعة macFUSE فيها مشكلة معروفة لسه متحلّتش ([#1194](https://github.com/macfuse/macfuse/issues/1194))، علشان كده FUSE-T هو الأساس.
-
 لو الاتنين متسطّبين، التطبيق بيستخدم FUSE-T، وكل نسخة ntfs-3g بتشتغل بس مع الدرايفر اللي اتبنت عليه.
-لو حاجة ناقصة، التطبيق هيوريك الخطوات وفيه زرار تنسخ بيه الأمر.
-
-### Full Disk Access
-
-التطبيق محتاج يقرا الهارد مباشرة، فلازم تضيفه في **System Settings ← Privacy & Security ← Full Disk Access**.
-علشان الإذن ميضيعش كل ما تبني التطبيق من جديد، وقّعه بشهادة ثابتة (شوف «البناء والتشغيل»).
-
-## البناء والتشغيل
-
-محتاج Xcode أو Command Line Tools (`xcode-select --install`).
-
-```sh
-git clone https://github.com/omaralam2/Macreader.git
-cd Macreader
-./scripts/build_app.sh
-open build/MacReader.app
-# أو انقله لمجلد التطبيقات:
-cp -R build/MacReader.app /Applications/
-```
-
-البناء العادي بيعمل توقيع محلي (ad-hoc) بيتغيّر كل مرة، فـ macOS بينسى إذن Full Disk Access بعد كل بناء.
-علشان الإذن يفضل، ابني بشهادة المطوّر بتاعتك:
-
-```sh
-SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build_app.sh
-```
-
-هيظهر رمز هارد 🖴 في شريط القوايم فوق.
 
 ## الاستخدام
 
 1. وصّل الهارد. هيظهر في القائمة وجنبه **«قراءة فقط»**.
-2. دوس **«افتح للكتابة»** ودخّل باسورد الماك. الحالة هتبقى **«قراءة وكتابة»** والهارد هيتفتح في Finder.
+2. دوس **«افتح للكتابة»** ودخّل باسورد الماك في الشباك اللي هيظهر. الحالة هتبقى **«قراءة وكتابة»** والهارد هيتفتح في Finder.
 3. اشتغل عادي: انسخ وعدّل وامسح.
-4. لما تخلص دوس **Eject** من التطبيق، أو Eject من Finder، **وبعدين بس** شيل الهارد.
+4. لما تخلص دوس **Eject** من التطبيق، **وبعدين بس** شيل الهارد.
+   الأحسن تعمل Eject من التطبيق مش من Finder، لأنه بيستنى ntfs-3g يخلّص كتابة كل حاجة قبل ما يفصل الهارد.
+
+## التحديث
+
+```sh
+cd ~/Macreader
+git pull
+./scripts/build_app.sh   # أو بـ SIGN_IDENTITY زي ما فوق
+```
+اقفل التطبيق من «اقفل MacReader» وافتحه تاني. لو بنيت من غير `SIGN_IDENTITY` هتحتاج تدي Full Disk Access تاني.
+
+## لو حاجة مش شغّالة
+
+| اللي ظهر | السبب | الحل |
+|---|---|---|
+| «MacReader مقدرش يقرا…» ومعاها `Operation not permitted` | التطبيق مش واخد Full Disk Access، أو اتبنى من جديد بتوقيع ad-hoc | شيله من Full Disk Access بـ **−** وضيفه تاني، واقفل التطبيق وافتحه |
+| «درايفر FUSE مش شغّال…» ومعاها `ntfs-3g did not create a mount` | FUSE-T أو ntfs-3g بتاعه مش متسطّبين صح | عيد الخطوتين 2 و 3. الهارد بيفضل قراءة فقط ومبيتغيّرش فيه حاجة |
+| «ويندوز مقفلش … صح» | الهارد في Fast Startup أو Hibernate، أو اتشال من غير Eject | شوف الجزء اللي تحت |
+| «الهارد ده محتاج chkdsk على ويندوز» | الهارد اتشال وهو مفتوح للكتابة | وصّله على ويندوز واعمل `chkdsk X: /f`، وبعدين دوس «عملت chkdsk خلاص» |
+| الهارد بيظهر باسم «NTFSTEST 1» بدل «NTFSTEST» | فيه فولدر قديم بنفس الاسم في `/Volumes` | مش بيأثر على حاجة. ولو عايز تشيله: اتأكد إن الهارد مش متركّب فيه، وبعدين `sudo rm -r "/Volumes/NAME"` |
+| الهارد بيفصل لوحده وانت بتنسخ ملفات كبيرة | بعض الفلاشات الرخيصة بتعمل reset تحت الضغط | جرّب منفذ تاني أو هارد تاني. لو حصل وهو مفتوح للكتابة اعمله `chkdsk` على ويندوز |
+| `Operation not permitted` في الـ Terminal جوه فولدر الهارد | قيود macOS على هاردات الشبكة (FUSE-T بيستخدم NFS) | فعّل **Network Volumes** للـ Terminal من System Settings ← Privacy & Security ← Files and Folders |
 
 ### لو الهارد مش راضي يتفتح للكتابة
 
@@ -130,5 +158,5 @@ scripts/install_ntfs3g_fuse_t.sh  # بيبني ntfs-3g على FUSE-T
 MacReader is a SwiftUI menu-bar app (macOS 13+) that remounts external NTFS partitions read/write via **ntfs-3g**, preferably on **FUSE-T** (kext-less, local NFS: no Reduced Security, works on macOS 26/27), falling back to **macFUSE**.
 Safety rules: read-only by default; never formats or repairs; mounts with `norecover` so hibernated or unclean volumes are refused; releases macOS's read-only mount and checks the NTFS boot-sector signature before mounting (BitLocker volumes are never touched, refusals restore the read-only mount); only reports success once a real mount exists; never force-unmounts; waits for ntfs-3g to exit before ejecting; remembers volumes that were unplugged while writable and requires a Windows `chkdsk` before writing to them again.
 Admin steps run through `sudo -A` with a native password dialog, so the Full Disk Access granted to MacReader applies (osascript's `with administrator privileges` runs under `authtrampoline`, which TCC does not attribute to the app).
-Setup: `brew trust --cask macos-fuse-t/cask/fuse-t && brew install --cask macos-fuse-t/cask/fuse-t`, then `./scripts/install_ntfs3g_fuse_t.sh`. Build with `./scripts/build_app.sh` (set `SIGN_IDENTITY` to a real certificate so Full Disk Access survives rebuilds). FUSE-T is free for personal use; commercial use needs a license from its authors.
+Setup (see the step-by-step section): `sudo mkdir -p /usr/local/include /usr/local/lib`, `brew trust --cask macos-fuse-t/cask/fuse-t && brew install --cask macos-fuse-t/cask/fuse-t`, then `./scripts/install_ntfs3g_fuse_t.sh`. Build with `./scripts/build_app.sh` (set `SIGN_IDENTITY` to a real certificate so Full Disk Access survives rebuilds). FUSE-T is free for personal use; commercial use needs a license from its authors.
 **Always keep backups.** No NTFS driver outside Windows can guarantee zero risk.
