@@ -1,32 +1,32 @@
 import AppKit
 import SwiftUI
 
-/// Shown when macFUSE or ntfs-3g is missing.
+/// Shown when FUSE-T (or macFUSE) or a matching ntfs-3g is missing.
 struct SetupView: View {
     let deps: Dependencies
     let recheck: () -> Void
 
-    private let fuseCommand = "brew install --cask macfuse"
-    private let ntfsCommand = "brew tap gromgit/homebrew-fuse && brew install ntfs-3g-mac"
+    private let fuseTCommand = "brew trust --cask macos-fuse-t/cask/fuse-t && brew install --cask macos-fuse-t/cask/fuse-t"
+    private let ntfsCommand = "~/Macreader/scripts/install_ntfs3g_fuse_t.sh"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("محتاجين نسطّب حاجتين الأول")
                 .font(.subheadline.weight(.semibold))
 
-            step(done: deps.macFUSE,
-                 title: "1. macFUSE",
-                 command: fuseCommand,
-                 note: "بعد التسطيب: System Settings ← Privacy & Security ← Allow، وبعدين Restart. على أجهزة Apple Silicon ممكن يطلب منك تفعّل Reduced Security من Recovery.")
+            step(done: deps.fuseTInstalled,
+                 title: "1. FUSE-T",
+                 command: fuseTCommand,
+                 note: "مش محتاج kernel extension ولا Reduced Security. مجاني للاستخدام الشخصي.")
 
-            step(done: deps.ntfs3gPath != nil,
-                 title: "2. ntfs-3g",
+            step(done: deps.ready,
+                 title: "2. ntfs-3g لـ FUSE-T",
                  command: ntfsCommand,
-                 note: nil)
+                 note: "السكربت جوه المشروع: بيبني ntfs-3g على FUSE-T ويسطّبه في /usr/local/bin.")
 
             HStack {
-                Button("صفحة macFUSE") {
-                    NSWorkspace.shared.open(URL(string: "https://osxfuse.github.io")!)
+                Button("صفحة FUSE-T") {
+                    NSWorkspace.shared.open(URL(string: "https://www.fuse-t.org")!)
                 }
                 Spacer()
                 Button("اتأكد تاني", action: recheck)

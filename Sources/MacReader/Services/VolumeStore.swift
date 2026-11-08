@@ -111,8 +111,8 @@ final class VolumeStore: ObservableObject {
     // MARK: - Actions
 
     func enableWrite(_ volume: NTFSVolume) {
-        guard deps.ready, let ntfs3g = deps.ntfs3gPath else {
-            message = AppMessage(text: "لازم تسطّب macFUSE و ntfs-3g الأول (الخطوات فوق).", isError: true)
+        guard deps.ready, let ntfs3g = deps.ntfs3gPath, let backend = deps.backend else {
+            message = AppMessage(text: "لازم تسطّب FUSE-T و ntfs-3g الأول (الخطوات فوق).", isError: true)
             return
         }
         guard !needsCheck.contains(volume.key) else {
@@ -125,7 +125,7 @@ final class VolumeStore: ObservableObject {
         message = nil
         Task { @MainActor in
             let result = await Task.detached(priority: .userInitiated) {
-                Result { try Mounter.enableWrite(volume, ntfs3g: ntfs3g) }
+                Result { try Mounter.enableWrite(volume, ntfs3g: ntfs3g, backend: backend) }
             }.value
             busy.remove(volume.id)
             switch result {
@@ -254,6 +254,12 @@ final class VolumeStore: ObservableObject {
             return AppMessage(text: "مش قادر أتعرّف على الهارد. جرّب تحدّث القائمة.", isError: true)
         case .notNTFS:
             return AppMessage(text: "«\(volumeName)» مش NTFS عادي (ممكن يكون متشفّر بـ BitLocker)، فـ MacReader مش هيلمسه." + safe, isError: true)
+        case .cantRead(let detail):
+            return AppMessage(text: """
+                MacReader مقدرش يقرا «\(volumeName)».
+                لو الخطأ «Operation not permitted»: افتح System Settings ← Privacy & Security ← Full Disk Access، وضيف MacReader وفعّله، وبعدين اقفل التطبيق وافتحه تاني وجرّب.
+                \(detail)
+                """ + safe, isError: true)
         case .busy(let apps):
             let list = apps.isEmpty
                 ? "اقفل أي ملف أو برنامج فاتح حاجة من الهارد وجرّب تاني."
@@ -265,7 +271,7 @@ final class VolumeStore: ObservableObject {
                 علشان نحافظ على الداتا مفتحناهوش للكتابة. وصّله على ويندوز واعمل chkdsk، أو اعمل Shut down كامل (دوس Shift وانت بتختار Shut down)، وبعدين جرّب تاني.
                 """ + safe, isError: true)
         case .fuseProblem(let detail):
-            return AppMessage(text: "macFUSE مش شغّال. افتح System Settings ← Privacy & Security واسمح بالـ extension بتاع macFUSE واعمل Restart.\n\(detail)" + safe, isError: true)
+            return AppMessage(text: "درايفر FUSE مش شغّال، فمقدرناش نفتح الهارد للكتابة. الأسهل تسطّب FUSE-T (مش محتاج Reduced Security) وتشغّل scripts/install_ntfs3g_fuse_t.sh.\n\(detail)" + safe, isError: true)
         case .stillWriting:
             return AppMessage(text: "ntfs-3g لسه بيخلّص كتابة على الهارد. متشيلوش! استنى شوية واعمل Eject تاني.", isError: true)
         case .failed(let detail):

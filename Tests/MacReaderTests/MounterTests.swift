@@ -41,6 +41,20 @@ final class MounterTests: XCTestCase {
         }
     }
 
+    /// ntfs-3g may exit 0 with no mount (macFUSE blocked). Success must only be
+    /// reported after a real mount exists, or the user writes to the Mac's own disk.
+    func testSuccessRequiresARealMount() throws {
+        let mountCheck = try XCTUnwrap(enableScript.range(of: "ntfs-3g did not create a mount"))
+        let ntfs3g = try XCTUnwrap(enableScript.range(of: "\"$NTFS3G\" \"$DEV\""))
+        let success = try XCTUnwrap(enableScript.range(of: "echo \"$MP\"", options: .backwards))
+        XCTAssertLessThan(ntfs3g.lowerBound, mountCheck.lowerBound)
+        XCTAssertLessThan(mountCheck.lowerBound, success.lowerBound)
+        guard case .fuseProblem = Mounter.parseFailure(
+            "MACREADER_MOUNT_FAILED fuse: ntfs-3g did not create a mount (is the macFUSE extension allowed?)") else {
+            return XCTFail("a missing mount must be reported as a macFUSE problem")
+        }
+    }
+
     func testEnableScriptRefusesUncleanVolumes() {
         XCTAssertTrue(enableScript.contains("-o norecover"))
         // ntfs-3g silently falls back to read-only on hibernated volumes; we must detect it.
@@ -52,8 +66,15 @@ final class MounterTests: XCTestCase {
         let sigCheck = try XCTUnwrap(enableScript.range(of: "MACREADER_NOT_NTFS"))
         let mount = try XCTUnwrap(enableScript.range(of: "\"$NTFS3G\" \"$DEV\""))
         let unmount = try XCTUnwrap(enableScript.range(of: "diskutil unmount"))
-        XCTAssertLessThan(sigCheck.lowerBound, unmount.lowerBound)
+        // macOS's NTFS driver holds the device while mounted, so the read-only
+        // mount is released first, then the signature is checked, then ntfs-3g mounts.
+        XCTAssertLessThan(unmount.lowerBound, sigCheck.lowerBound)
         XCTAssertLessThan(sigCheck.lowerBound, mount.lowerBound)
+        // Every refusal after the unmount must put the volume back read-only.
+        for marker in ["MACREADER_NOT_NTFS", "MACREADER_CANT_READ"] {
+            let line = try XCTUnwrap(enableScript.split(separator: "\n").first { $0.contains(marker) })
+            XCTAssertTrue(line.contains("diskutil mount readOnly"), "\(marker) must remount read-only")
+        }
     }
 
     func testEjectWaitsForNtfs3gBeforeEjecting() throws {
@@ -65,9 +86,13 @@ final class MounterTests: XCTestCase {
     /// Runs the real signature-check lines from the script against fake boot sectors.
     func testBootSectorSignatureCheck() throws {
         let lines = enableScript.split(separator: "\n").filter {
-            $0.hasPrefix("SIG=") || $0.hasPrefix("if [ \"$SIG\"")
+            $0.hasPrefix("if ! RDERR=") || $0.hasPrefix("SIG=") || $0.hasPrefix("if [ \"$SIG\"")
         }
-        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.count, 3)
+
+        // A device that cannot be read must be reported as unreadable, not as "not NTFS".
+        let missing = "DEV='/nonexistent/macreader-dev'\n" + lines.joined(separator: "\n") + "\necho OK\n"
+        XCTAssertEqual(try runSh([], script: missing).status, 68)
 
         func check(_ sector: [UInt8]) throws -> Int32 {
             let url = FileManager.default.temporaryDirectory
@@ -90,6 +115,8 @@ final class MounterTests: XCTestCase {
 
     func testParseFailure() {
         XCTAssertEqual(Mounter.parseFailure("MACREADER_NOT_NTFS"), .notNTFS)
+        XCTAssertEqual(Mounter.parseFailure("MACREADER_CANT_READ dd: /dev/disk4s1: Operation not permitted"),
+                       .cantRead("dd: /dev/disk4s1: Operation not permitted"))
         XCTAssertEqual(Mounter.parseFailure("MACREADER_STILL_WRITING"), .stillWriting)
         XCTAssertEqual(Mounter.parseFailure("MACREADER_BUSY\nPreview\rFinder\n"), .busy(["Preview", "Finder"]))
         XCTAssertEqual(Mounter.parseFailure("MACREADER_BUSY"), .busy([]))

@@ -13,8 +13,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN_DIR/MacReader" "$APP/Contents/MacOS/MacReader"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
-# Ad-hoc signature so macOS will run it locally.
-codesign --force --deep --sign - "$APP"
+# Ad-hoc signature by default so macOS will run it locally. An ad-hoc identity
+# changes on every build, so macOS forgets Full Disk Access after a rebuild.
+# To keep the permission, sign with a real certificate:
+#   SIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build_app.sh
+codesign --force --deep --sign "${SIGN_IDENTITY:--}" "$APP"
 
 echo
 echo "✅ Built $APP"

@@ -5,6 +5,9 @@ enum MountError: Error, Equatable {
     case invalidDevice
     /// The partition's boot sector is not NTFS (e.g. BitLocker). Nothing was changed.
     case notNTFS
+    /// The boot sector could not be read at all (usually macOS privacy:
+    /// MacReader needs Full Disk Access). Nothing was changed.
+    case cantRead(String)
     /// Files are still open on the volume. Nothing was unmounted.
     case busy([String])
     /// Windows left the volume hibernated / with unflushed metadata.
@@ -17,7 +20,7 @@ enum MountError: Error, Equatable {
     case failed(String)
 }
 
-/// Everything here runs as root through `Shell.runAsAdmin`.
+/// Everything here runs as root through `Shell.runAsAdmin` (sudo + native password dialog).
 ///
 /// Data-safety rules (enforced by unit tests, do not relax these):
 ///  * never format, repair (ntfsfix/chkdsk) or remove a hibernation file;
@@ -30,9 +33,9 @@ enum Mounter {
     // MARK: - Actions
 
     /// Re-mounts an NTFS partition read/write with ntfs-3g. Returns the mount point.
-    static func enableWrite(_ volume: NTFSVolume, ntfs3g: String) throws -> String {
+    static func enableWrite(_ volume: NTFSVolume, ntfs3g: String, backend: FUSEBackend) throws -> String {
         guard NTFSVolume.isValidDeviceName(volume.id) else { throw MountError.invalidDevice }
-        let script = enableWriteScript(volume: volume, ntfs3g: ntfs3g, uid: getuid(), gid: getgid())
+        let script = enableWriteScript(volume: volume, ntfs3g: ntfs3g, uid: getuid(), gid: getgid(), backend: backend)
 
         switch Shell.runAsAdmin(script) {
         case .success(let output):
@@ -82,33 +85,62 @@ enum Mounter {
         "/Volumes/" + sanitizedName(volume.name)
     }
 
-    static func enableWriteScript(volume: NTFSVolume, ntfs3g: String, uid: uid_t, gid: gid_t) -> String {
+    /// Backend-specific ntfs-3g options. Both always include `norecover`.
+    /// FUSE-T mounts over local NFS, where macFUSE's `local` / `auto_xattr`
+    /// options don't apply (macOS stores extended attributes as ._ files there).
+    static func mountOptions(backend: FUSEBackend, uid: uid_t, gid: gid_t) -> String {
+        let common = "-o allow_other -o norecover -o uid=\(uid) -o gid=\(gid)"
+        switch backend {
+        case .fuseT: return common
+        case .macFUSE: return "-o local " + common + " -o auto_xattr"
+        }
+    }
+
+    static func enableWriteScript(volume: NTFSVolume, ntfs3g: String, uid: uid_t, gid: gid_t,
+                                  backend: FUSEBackend = .fuseT) -> String {
         """
         DEV=\(Shell.quote(volume.devicePath))
         MP=\(Shell.quote(defaultMountPoint(for: volume)))
         VN=\(Shell.quote(sanitizedName(volume.name)))
         NTFS3G=\(Shell.quote(ntfs3g))
 
-        # 1) Safety: only ever touch a real NTFS boot sector (BitLocker = "-FVE-FS-").
-        SIG=$(/bin/dd if="$DEV" bs=512 count=1 2>/dev/null | /bin/dd bs=1 skip=3 count=8 2>/dev/null)
-        if [ "$SIG" != "NTFS    " ]; then echo "MACREADER_NOT_NTFS" >&2; exit 64; fi
-
-        # 2) Unmount the read-only mount made by macOS (never forced).
+        # 1) Unmount the read-only mount made by macOS (never forced). macOS's own NTFS
+        #    driver keeps the device open while mounted ("Resource busy"), so the boot
+        #    sector can only be read after this. Read-only unmount/remount writes nothing.
         if /sbin/mount | /usr/bin/grep -q "^$DEV on "; then
           /usr/sbin/diskutil unmount "$DEV" >/dev/null 2>&1 || { echo "MACREADER_BUSY" >&2; exit 66; }
         fi
 
+        # 2) Safety: only ever touch a real NTFS boot sector (BitLocker = "-FVE-FS-").
+        #    A failed read must not be reported as "not NTFS". On any refusal, put the
+        #    volume back read-only exactly as it was.
+        if ! RDERR=$(/bin/dd if="$DEV" of=/dev/null bs=512 count=1 2>&1); then /usr/sbin/diskutil mount readOnly "$DEV" >/dev/null 2>&1; echo "MACREADER_CANT_READ $RDERR" >&2; exit 68; fi
+        SIG=$(/bin/dd if="$DEV" bs=512 count=1 2>/dev/null | /bin/dd bs=1 skip=3 count=8 2>/dev/null)
+        if [ "$SIG" != "NTFS    " ]; then /usr/sbin/diskutil mount readOnly "$DEV" >/dev/null 2>&1; echo "MACREADER_NOT_NTFS" >&2; exit 64; fi
+
         # 3) Mount read/write. norecover = refuse unclean volumes instead of resetting the journal.
         if [ -e "$MP" ] && [ -n "$(/bin/ls -A "$MP" 2>/dev/null)" ]; then MP="$MP ($(/usr/bin/basename "$DEV"))"; fi
         /bin/mkdir -p "$MP"
-        if ! OUT=$("$NTFS3G" "$DEV" "$MP" -o local -o allow_other -o auto_xattr -o norecover -o uid=\(uid) -o gid=\(gid) -o volname="$VN" 2>&1); then
+        if ! OUT=$("$NTFS3G" "$DEV" "$MP" \(mountOptions(backend: backend, uid: uid, gid: gid)) -o volname="$VN" 2>&1); then
           /bin/rmdir "$MP" 2>/dev/null
           /usr/sbin/diskutil mount readOnly "$DEV" >/dev/null 2>&1 || /usr/sbin/diskutil mount "$DEV" >/dev/null 2>&1
           echo "MACREADER_MOUNT_FAILED $OUT" >&2
           exit 65
         fi
 
-        # 4) ntfs-3g does NOT fail on a hibernated/unclean volume: it silently mounts it
+        # 4) ntfs-3g can exit 0 without any mount appearing (e.g. the macFUSE kernel
+        #    extension is blocked). Then $MP is just a plain folder on the Mac's own
+        #    disk: never report success, remove it and put the volume back read-only.
+        N=0
+        while ! /sbin/mount | /usr/bin/grep -qF -- " on $MP (" && [ $N -lt 10 ]; do N=$((N+1)); /bin/sleep 0.5; done
+        if ! /sbin/mount | /usr/bin/grep -qF -- " on $MP ("; then
+          /bin/rmdir "$MP" 2>/dev/null
+          /usr/sbin/diskutil mount readOnly "$DEV" >/dev/null 2>&1 || true
+          echo "MACREADER_MOUNT_FAILED fuse: ntfs-3g did not create a mount (is the macFUSE extension allowed?) $OUT" >&2
+          exit 65
+        fi
+
+        # 5) ntfs-3g does NOT fail on a hibernated/unclean volume: it silently mounts it
         #    read-only and exits 0. Detect that, undo it and report it.
         if /sbin/mount | /usr/bin/grep -F -- " on $MP (" | /usr/bin/grep -q "read-only"; then
           /sbin/umount "$MP" 2>/dev/null
@@ -171,6 +203,9 @@ enum Mounter {
     }
 
     static func parseFailure(_ message: String) -> MountError {
+        if let range = message.range(of: "MACREADER_CANT_READ") {
+            return .cantRead(String(message[range.upperBound...]).trimmingCharacters(in: .whitespacesAndNewlines))
+        }
         if message.contains("MACREADER_NOT_NTFS") { return .notNTFS }
         if message.contains("MACREADER_STILL_WRITING") { return .stillWriting }
         if let range = message.range(of: "MACREADER_BUSY") {

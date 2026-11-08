@@ -42,6 +42,20 @@ final class ShellTests: XCTestCase {
         XCTAssertFalse(missing.ok)
     }
 
+    func testAdminResultMapping() {
+        func r(_ status: Int32, _ out: String = "", _ err: String = "") -> AdminResult {
+            Shell.adminResult(ShellResult(status: status, stdout: out, stderr: err))
+        }
+        guard case .success("/Volumes/X") = r(0, "/Volumes/X\n") else { return XCTFail("success") }
+        guard case .cancelled = r(1, "", "MACREADER_ASKPASS_CANCELLED\nsudo: no password was provided\n") else {
+            return XCTFail("closing the password dialog must count as cancel")
+        }
+        guard case .failure(let wrong) = r(1, "", "Sorry, try again.\nsudo: 3 incorrect password attempts\n"),
+              wrong == "الباسورد غلط." else { return XCTFail("wrong password") }
+        guard case .failure(let msg) = r(65, "", "MACREADER_MOUNT_FAILED boom\n"),
+              Mounter.parseFailure(msg) == .failed("boom") else { return XCTFail("script errors pass through") }
+    }
+
     /// Lots of stderr must not deadlock run().
     func testLargeStderrDoesNotDeadlock() {
         let r = Shell.run("/bin/sh", ["-c", "i=0; while [ $i -lt 20000 ]; do echo xxxxxxxxxxxxxxxxxxxx >&2; i=$((i+1)); done; echo done"])

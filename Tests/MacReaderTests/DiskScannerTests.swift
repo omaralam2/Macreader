@@ -125,6 +125,39 @@ final class DiskScannerTests: XCTestCase {
         XCTAssertEqual(vols.first { $0.id == "disk5s1" }?.state, .readWrite)
     }
 
+    /// FUSE-T mounts are NFS mounts from "fuse-t:/<volname>"; the device is
+    /// matched through the running ntfs-3g process.
+    func testFuseTMountIsWritable() throws {
+        let mounts = [MountEntry(from: "fuse-t:/Work", path: "/Volumes/Work", type: "nfs", readOnly: false)]
+        let vols = try scan(mounts: mounts, known: ["disk5s1": "/Volumes/Work"])
+        XCTAssertEqual(vols.first { $0.id == "disk5s1" }?.state, .readWrite)
+
+        let ro = [MountEntry(from: "fuse-t:/Work", path: "/Volumes/Work", type: "nfs", readOnly: true)]
+        XCTAssertEqual(try scan(mounts: ro, known: ["disk5s1": "/Volumes/Work"]).first { $0.id == "disk5s1" }?.state,
+                       .readOnly)
+    }
+
+    /// A volume without UUIDs must keep the same key whether macOS mounted it
+    /// (TotalSize present) or FUSE-T did (TotalSize missing). Otherwise the
+    /// safety ledger loses track and flags a cleanly ejected disk.
+    func testKeyWithoutUUIDIsStableAcrossMountStates() throws {
+        func key(_ info: [String: Any]) throws -> String? {
+            let root = try XCTUnwrap(DiskScanner.parsePlist(listPlist))
+            return DiskScanner.parseVolumes(list: root, info: { $0 == "disk5s1" ? info : (self.infos[$0] ?? [:]) },
+                                            mounts: [], knownMounts: [:])
+                .first { $0.id == "disk5s1" }?.key
+        }
+        let macOSMounted = try key(["FilesystemType": "ntfs", "VolumeName": "Work", "TotalSize": 1_999_999_000_000 as Int64])
+        let fuseTMounted = try key(["FilesystemType": "ntfs", "VolumeName": "Work"])
+        XCTAssertNotNil(macOSMounted)
+        XCTAssertEqual(macOSMounted, fuseTMounted)
+    }
+
+    func testOrdinaryNFSShareIsNotTreatedAsOurs() {
+        XCTAssertFalse(MountEntry(from: "server:/share", path: "/Volumes/share", type: "nfs", readOnly: false).isFUSE)
+        XCTAssertTrue(MountEntry(from: "fuse-t:/X", path: "/Volumes/X", type: "nfs", readOnly: false).isFUSE)
+    }
+
     func testParseNTFS3GProcesses() {
         let ps = """
         /sbin/launchd

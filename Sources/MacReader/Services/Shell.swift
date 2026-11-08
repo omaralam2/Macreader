@@ -19,10 +19,11 @@ private final class DataBox: @unchecked Sendable {
 
 enum Shell {
     /// Runs a program directly (no shell involved) and waits for it.
-    static func run(_ executable: String, _ arguments: [String]) -> ShellResult {
+    static func run(_ executable: String, _ arguments: [String], environment: [String: String]? = nil) -> ShellResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let environment { process.environment = environment }
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
@@ -54,40 +55,64 @@ enum Shell {
         )
     }
 
-    /// Runs a /bin/sh script as root. macOS shows its standard password dialog.
-    /// The script is passed to osascript as an argument, so it never has to be
-    /// escaped into AppleScript source.
+    /// Runs a /bin/sh script as root through `sudo -A`, which asks for the
+    /// password with a native dialog (the askpass helper below).
+    ///
+    /// Why not `do shell script … with administrator privileges`: that runs the
+    /// script through Apple's `authtrampoline`, and macOS privacy checks (TCC)
+    /// are then made against authtrampoline instead of MacReader, so reading
+    /// the raw disk fails with "Operation not permitted" even after the user
+    /// gave MacReader Full Disk Access. sudo stays a child of MacReader, so the
+    /// grant applies. The script is passed as an argument, never interpolated.
     static func runAsAdmin(_ script: String) -> AdminResult {
-        let result = run("/usr/bin/osascript", [
-            "-e", "on run argv",
-            "-e", "do shell script (item 1 of argv) with administrator privileges",
-            "-e", "end run",
-            script,
-        ])
+        guard let askpass = askpassPath() else {
+            return .failure("MacReader couldn't prepare the password prompt.")
+        }
+        var env = ProcessInfo.processInfo.environment
+        env["SUDO_ASKPASS"] = askpass
+        // -k: always ask (no cached sudo ticket); -p "": no text prompt on stderr.
+        let result = run("/usr/bin/sudo", ["-A", "-k", "-p", "", "/bin/sh", "-c", script], environment: env)
+        return adminResult(result)
+    }
+
+    static func adminResult(_ result: ShellResult) -> AdminResult {
         if result.ok {
             return .success(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         }
-        if result.stderr.contains("(-128)") {
+        let err = result.stderr
+        if err.contains("no password was provided") || err.contains("MACREADER_ASKPASS_CANCELLED") {
             return .cancelled
         }
-        return .failure(cleanOsascriptError(result.stderr))
+        if err.contains("incorrect password attempt") {
+            return .failure("الباسورد غلط.")
+        }
+        let cleaned = err.split(whereSeparator: \.isNewline)
+            .filter { !$0.hasPrefix("Sorry, try again") }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return .failure(cleaned)
+    }
+
+    /// Writes (once) a tiny askpass helper that shows a native password dialog
+    /// and prints the password to sudo. Nothing is stored anywhere.
+    private static func askpassPath() -> String? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("macreader-askpass.sh")
+        let body = """
+        #!/bin/sh
+        /usr/bin/osascript -e 'text returned of (display dialog "MacReader محتاج باسورد الماك علشان يفتح الهارد أو يفصله." default answer "" with hidden answer with title "MacReader" with icon caution buttons {"إلغاء", "OK"} default button "OK" cancel button "إلغاء")' 2>/dev/null || { echo MACREADER_ASKPASS_CANCELLED >&2; exit 1; }
+
+        """
+        do {
+            try body.write(to: url, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
+            return url.path
+        } catch {
+            return nil
+        }
     }
 
     /// Single-quotes a value for /bin/sh.
     static func quote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
-
-    /// "0:93: execution error: <message> (65)" -> "<message>"
-    private static func cleanOsascriptError(_ raw: String) -> String {
-        var text = raw.replacingOccurrences(of: "\r", with: "\n")
-        if let range = text.range(of: "execution error: ") {
-            text = String(text[range.upperBound...])
-        }
-        text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let range = text.range(of: #"\s*\(-?[0-9]+\)$"#, options: .regularExpression) {
-            text.removeSubrange(range)
-        }
-        return text
     }
 }

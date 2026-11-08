@@ -6,9 +6,10 @@ struct MountEntry {
     let type: String
     let readOnly: Bool
 
+    /// macFUSE mounts have a "macfuse" type; FUSE-T mounts are local NFS
+    /// mounts whose source is "fuse-t:/<volname>".
     var isFUSE: Bool {
-        let t = type.lowercased()
-        return t.contains("fuse")
+        type.lowercased().contains("fuse") || from.hasPrefix("fuse-t:")
     }
 }
 
@@ -99,9 +100,13 @@ enum DiskScanner {
                     ?? (part["VolumeName"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     ?? "NTFS"
                 let size = int64(info["TotalSize"]) ?? int64(info["Size"]) ?? int64(part["Size"]) ?? 0
+                // The key must not change with the mount state. `TotalSize` is only
+                // reported while macOS itself has the volume mounted (not under
+                // FUSE-T), so the fallback uses the partition size, which is fixed.
+                let partitionSize = int64(part["Size"]) ?? int64(info["Size"]) ?? size
                 let key = (info["VolumeUUID"] as? String)
                     ?? (info["DiskUUID"] as? String)
-                    ?? "\(name)|\(size)"
+                    ?? "\(name)|\(partitionSize)"
 
                 result.append(NTFSVolume(
                     id: id,
